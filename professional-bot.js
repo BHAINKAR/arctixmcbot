@@ -5,6 +5,7 @@ const { Client, GatewayIntentBits, ActivityType, REST, Routes, SlashCommandBuild
 const fs = require("fs")
 const path = require("path")
 const readline = require("readline")
+const http = require("http")
 require("dotenv").config()
 
 // Configuration
@@ -25,6 +26,12 @@ const CONFIG = {
 
     // Commands to override botghost status commands
     commandPrefix: "!",
+  },
+
+  // Web server settings for Render.com
+  server: {
+    // Default port (will be overridden by environment variable if available)
+    port: process.env.PORT || 8080,
   },
 }
 
@@ -320,6 +327,100 @@ class BotghostHandler {
 }
 
 // ============================
+// Web Server for Render.com
+// ============================
+class WebServer {
+  constructor(statusManager) {
+    this.statusManager = statusManager
+    this.server = null
+  }
+
+  start() {
+    const port = CONFIG.server.port
+
+    this.server = http.createServer((req, res) => {
+      // Handle health check endpoint
+      if (req.url === "/health") {
+        const currentStatus = this.statusManager ? this.statusManager.getCurrentStatus() : null
+        const statusText = currentStatus ? `${ActivityType[currentStatus.type]} ${currentStatus.text}` : "No status set"
+
+        res.writeHead(200, { "Content-Type": "application/json" })
+        res.end(
+          JSON.stringify({
+            status: "ok",
+            message: "Discord Bot Status Manager is running",
+            botStatus: statusText,
+            uptime: process.uptime(),
+          }),
+        )
+        return
+      }
+
+      // Handle root endpoint
+      res.writeHead(200, { "Content-Type": "text/html" })
+      res.end(`
+        <!DOCTYPE html>
+        <html>
+          <head>
+            <title>Discord Bot Status Manager</title>
+            <style>
+              body {
+                font-family: Arial, sans-serif;
+                max-width: 800px;
+                margin: 0 auto;
+                padding: 20px;
+                line-height: 1.6;
+              }
+              h1 {
+                color: #5865F2;
+              }
+              .status {
+                background-color: #f4f4f4;
+                padding: 15px;
+                border-radius: 5px;
+                margin: 20px 0;
+              }
+            </style>
+          </head>
+          <body>
+            <h1>Discord Bot Status Manager</h1>
+            <p>Your Discord bot is running successfully!</p>
+            <div class="status">
+              <h2>Bot Status</h2>
+              <p>Current status: ${
+                this.statusManager
+                  ? this.statusManager.getCurrentStatus()
+                    ? `${ActivityType[this.statusManager.getCurrentStatus().type]} ${this.statusManager.getCurrentStatus().text}`
+                    : "No status set"
+                  : "Status manager not initialized"
+              }</p>
+              <p>Uptime: ${Math.floor(process.uptime() / 60)} minutes</p>
+            </div>
+            <p>This web server keeps your bot running on Render.com</p>
+          </body>
+        </html>
+      `)
+    })
+
+    this.server.listen(port, () => {
+      console.log(`Web server running on port ${port}`)
+      console.log(`Health check available at: http://localhost:${port}/health`)
+    })
+
+    this.server.on("error", (error) => {
+      console.error("Web server error:", error)
+    })
+  }
+
+  stop() {
+    if (this.server) {
+      this.server.close()
+      this.server = null
+    }
+  }
+}
+
+// ============================
 // Token Setup Helper
 // ============================
 async function promptForToken() {
@@ -397,6 +498,10 @@ async function main() {
   // Initialize botghost handler
   const botghostHandler = new BotghostHandler(client, statusManager)
 
+  // Initialize web server for Render.com
+  const webServer = new WebServer(statusManager)
+  webServer.start()
+
   // When the client is ready, run this code (only once)
   client.once("ready", async () => {
     console.log(`Logged in as ${client.user.tag}!`)
@@ -419,11 +524,13 @@ async function main() {
   // Add event listeners for graceful shutdown
   process.on("SIGINT", () => {
     console.log("Received SIGINT. Bot is shutting down...")
+    webServer.stop()
     process.exit(0)
   })
 
   process.on("SIGTERM", () => {
     console.log("Received SIGTERM. Bot is shutting down...")
+    webServer.stop()
     process.exit(0)
   })
 }
@@ -433,4 +540,3 @@ console.log("Starting Discord Bot Status Manager...")
 main().catch((error) => {
   console.error("Failed to start the bot:", error)
 })
-
